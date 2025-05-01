@@ -330,11 +330,12 @@ def compute_iou(box1, box2, eps=1e-7):
 
 
 def strip_optimizer(filename):
+    print(f"entering util.strip_optimizer for: {filename}")
     x = torch.load(filename, map_location="cpu")
     x['model'].half()  # to FP16
     for p in x['model'].parameters():
         p.requires_grad = False
-    torch.save(x, f=filename)
+    torch.save(x['model'].state_dict(), f=filename)
 
 
 def clip_gradients(model, max_norm=10.0):
@@ -343,6 +344,7 @@ def clip_gradients(model, max_norm=10.0):
 
 
 def load_weight(model, ckpt):
+    print('entering util.load_weights')
     dst = model.state_dict()
     src = torch.load(ckpt)['model'].float().cpu()
 
@@ -423,7 +425,9 @@ class LinearLR:
         min_lr = params['min_lr']
 
         warmup_steps = int(max(params['warmup_epochs'] * num_steps, 100))
+        print("warmup_steps: ", warmup_steps)
         decay_steps = int(args.epochs * num_steps - warmup_steps)
+        print("decay_steps: ", decay_steps)
 
         warmup_lr = numpy.linspace(min_lr, max_lr, int(warmup_steps), endpoint=False)
         decay_lr = numpy.linspace(max_lr, min_lr, decay_steps)
@@ -441,7 +445,7 @@ class EMA:
     Keeps a moving average of everything in the model state_dict (parameters and buffers)
     For EMA details see https://www.tensorflow.org/api_docs/python/tf/train/ExponentialMovingAverage
     """
-
+    print("entering util.EMA")
     def __init__(self, model, decay=0.9999, tau=2000, updates=0):
         # Create EMA
         self.ema = copy.deepcopy(model).eval()  # FP32 EMA

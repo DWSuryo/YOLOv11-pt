@@ -3,6 +3,7 @@ import csv
 import os
 import warnings
 from argparse import ArgumentParser
+from datetime import datetime
 
 import torch
 import tqdm
@@ -15,7 +16,7 @@ from utils.dataset import Dataset
 
 warnings.filterwarnings("ignore")
 
-data_dir = '../Dataset/COCO'
+data_dir = 'D:/datasets/coco'
 
 
 def train(args, params):
@@ -38,6 +39,20 @@ def train(args, params):
         for filename in f.readlines():
             filename = os.path.basename(filename.rstrip())
             filenames.append(f'{data_dir}/images/train2017/' + filename)
+        print("filename lists: ", len(filenames))
+
+    # check if file exists
+    existing_count = 0
+    nonexisting_count = 0
+
+    for filepath in filenames:
+        if os.path.exists(filepath):
+            existing_count += 1
+        else:
+            nonexisting_count += 1
+
+    print(f"Number of existing files: {existing_count}")
+    print(f"Number of non-existing files: {nonexisting_count}")
 
     sampler = None
     dataset = Dataset(filenames, args.input_size, params, augment=True)
@@ -50,6 +65,9 @@ def train(args, params):
 
     # Scheduler
     num_steps = len(loader)
+    # print(args)
+    # print(params)
+    # print(num_steps)
     scheduler = util.LinearLR(args, params, num_steps)
 
     if args.distributed:
@@ -152,7 +170,10 @@ def train(args, params):
 
                 # Save model
                 save = {'epoch': epoch + 1,
-                        'model': copy.deepcopy(ema.ema)}
+                        'model': copy.deepcopy(ema.ema),
+                        # 'model': copy.deepcopy(ema.ema).state_dict()
+                        }
+                # print(save['model'])
 
                 # Save last, best and delete
                 torch.save(save, f='./weights/last.pt')
@@ -257,6 +278,9 @@ def profile(args, params):
 
 
 def main():
+    time_start = datetime.now()
+    print("Started at Date and Time:", time_start.strftime("%Y-%m-%d %H:%M:%S"))
+
     parser = ArgumentParser()
     parser.add_argument('--input-size', default=640, type=int)
     parser.add_argument('--batch-size', default=32, type=int)
@@ -282,6 +306,7 @@ def main():
 
     with open('utils/args.yaml', errors='ignore') as f:
         params = yaml.safe_load(f)
+        # print(params)
 
     util.setup_seed()
     util.setup_multi_processes()
@@ -289,6 +314,8 @@ def main():
     profile(args, params)
 
     if args.train:
+        # print(args)
+        # print(params)
         train(args, params)
     if args.test:
         test(args, params)
@@ -297,6 +324,18 @@ def main():
     if args.distributed:
         torch.distributed.destroy_process_group()
     torch.cuda.empty_cache()
+
+    time_end = datetime.now()
+    print("Finished at Date and Time:", time_end.strftime("%Y-%m-%d %H:%M:%S"))
+    time_duration = time_end - time_start
+    # Format the duration as Days HH:MM:SS
+    days = time_duration.days
+    seconds = time_duration.seconds
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    formatted_duration = f"{days} Days {hours:02}:{minutes:02}:{seconds:02}"
+    print(f"Code execution time: {formatted_duration}")
 
 
 if __name__ == "__main__":
