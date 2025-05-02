@@ -335,7 +335,8 @@ def strip_optimizer(filename):
     x['model'].half()  # to FP16
     for p in x['model'].parameters():
         p.requires_grad = False
-    torch.save(x['model'].state_dict(), f=filename)
+    # torch.save(x['model'], f=f"{filename}.pt")
+    torch.save(x['model'].state_dict(), f=f"{filename}_state_dict.pt")
 
 
 def clip_gradients(model, max_norm=10.0):

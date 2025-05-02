@@ -20,6 +20,7 @@ class Dataset(data.Dataset):
 
         # Read labels
         labels = self.load_label(filenames)
+        print(f"labels: {labels}")
         self.labels = list(labels.values())
         self.filenames = list(labels.keys())  # update
         self.n = len(self.filenames)  # number of samples
@@ -195,12 +196,18 @@ class Dataset(data.Dataset):
     @staticmethod
     def load_label(filenames):
         path = f'{os.path.dirname(filenames[0])}.cache'
+        # print(path)
         if os.path.exists(path):
+            print("cache loaded")
             return torch.load(path)
+        else:
+            print("cache not loaded")
         x = {}
         for filename in filenames:
+            # print(filename)
             try:
                 # verify images
+                # print(f"file exists: {os.path.isfile(filename)}")
                 with open(filename, 'rb') as f:
                     image = Image.open(f)
                     image.verify()  # PIL verify
@@ -209,13 +216,19 @@ class Dataset(data.Dataset):
                 assert image.format.lower() in FORMATS, f'invalid image format {image.format}'
 
                 # verify labels
-                a = f'{os.sep}images{os.sep}'
-                b = f'{os.sep}labels{os.sep}'
-                print(a)
-                print(b)
-                if os.path.isfile(b.join(filename.rsplit(a, 1)).rsplit('.', 1)[0] + '.txt'):
-                    with open(b.join(filename.rsplit(a, 1)).rsplit('.', 1)[0] + '.txt') as f:
+                # a = f'{os.sep}images{os.sep}'
+                # b = f'{os.sep}labels{os.sep}'
+                a = 'images'
+                b = 'labels'
+                # print(a)
+                # print(os.path.isfile(filename), filename)
+                # file_txt = b.join(filename.rsplit(b, 1)).rsplit('.', 1)[0] + '.txt'
+                file_txt = filename.replace(a, b).rsplit('.', 1)[0] + '.txt'
+                # print(os.path.isfile(file_txt), file_txt)
+                if os.path.isfile(file_txt):
+                    with open(file_txt) as f:
                         label = [x.split() for x in f.read().strip().splitlines() if len(x)]
+                        # print(label)
                         label = numpy.array(label, dtype=numpy.float32)
                     nl = len(label)
                     if nl:
