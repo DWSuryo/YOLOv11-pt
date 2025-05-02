@@ -8,6 +8,8 @@ import torch
 from PIL import Image
 from torch.utils import data
 
+from tqdm import tqdm
+
 FORMATS = 'bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp'
 
 
@@ -203,7 +205,7 @@ class Dataset(data.Dataset):
         else:
             print("cache not loaded")
         x = {}
-        for filename in filenames:
+        for filename in tqdm(filenames):
             # print(filename)
             try:
                 # verify images
