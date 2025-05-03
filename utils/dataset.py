@@ -22,7 +22,7 @@ class Dataset(data.Dataset):
 
         # Read labels
         labels = self.load_label(filenames)
-        print(f"labels: {labels}")
+        # print(f"labels: {labels.keys()}")
         self.labels = list(labels.values())
         self.filenames = list(labels.keys())  # update
         self.n = len(self.filenames)  # number of samples
@@ -59,8 +59,10 @@ class Dataset(data.Dataset):
 
         nl = len(label)  # number of labels
         h, w = image.shape[:2]
-        cls = label[:, 0:1]
-        box = label[:, 1:5]
+        # cls = label[:, 0:1]
+        # box = label[:, 1:5]
+        cls = label[:, 0:1] if nl > 0 and label.ndim > 1 else numpy.empty((0, 1), dtype=numpy.float32)
+        box = label[:, 1:5] if nl > 0 and label.ndim > 1 else numpy.empty((0, 4), dtype=numpy.float32)
         box = xy2wh(box, w, h)
 
         if self.augment:
@@ -82,9 +84,15 @@ class Dataset(data.Dataset):
 
         target_cls = torch.zeros((nl, 1))
         target_box = torch.zeros((nl, 4))
-        if nl:
+        # if nl:
+        #     target_cls = torch.from_numpy(cls)
+        #     target_box = torch.from_numpy(box)
+        if nl > 0:
+            # Ensure cls has at least 2 dimensions before converting
+            if cls.ndim == 1:
+                cls = cls.reshape(-1, 1)
             target_cls = torch.from_numpy(cls)
-            target_box = torch.from_numpy(box)
+            target_box = torch.from_numpy(box)        
 
         # Convert HWC to CHW, BGR to RGB
         sample = image.transpose((2, 0, 1))[::-1]
@@ -164,6 +172,9 @@ class Dataset(data.Dataset):
 
             # Labels
             label = self.labels[index].copy()
+            # # debugging labels
+            # print(f"Shape of label (non-mosaic, index {index}): {label.shape}")
+            # print(f"Content of label (non-mosaic, index {index}):\n{label}")
             if len(label):
                 label[:, 1:] = wh2xy(label[:, 1:], shape[1], shape[0], pad_w, pad_h)
             label4.append(label)
@@ -182,7 +193,25 @@ class Dataset(data.Dataset):
     def collate_fn(batch):
         samples, cls, box, indices = zip(*batch)
 
-        cls = torch.cat(cls, dim=0)
+        # # debugging cls
+        # print("--- Inspecting cls list ---")
+        # for i, c in enumerate(cls):
+        #     print(f"Length of cls[{i}]: {len(c)}")
+        #     if isinstance(c, torch.Tensor):
+        #         print(f"Shape of cls[{i}]: {c.shape}")
+        #         print(f"Content of cls[{i}]: {c}")
+        #     else:
+        #         print(f"Type of cls[{i}]: {type(c)}")
+        #         print(f"Content of cls[{i}]: {c}")
+        # print("--- End of cls inspection ---")
+
+        try:
+            cls = torch.cat(cls, dim=0)
+        except RuntimeError as e:
+            print(f"Error during torch.cat on cls: {e}")
+            raise e
+        
+        # cls = torch.cat(cls, dim=0)
         box = torch.cat(box, dim=0)
 
         new_indices = list(indices)
@@ -198,7 +227,7 @@ class Dataset(data.Dataset):
     @staticmethod
     def load_label(filenames):
         path = f'{os.path.dirname(filenames[0])}.cache'
-        # print(path)
+        print(path)
         if os.path.exists(path):
             print("cache loaded")
             return torch.load(path)

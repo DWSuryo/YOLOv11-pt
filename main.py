@@ -16,7 +16,8 @@ from utils.dataset import Dataset
 
 warnings.filterwarnings("ignore")
 
-data_dir = 'D:/datasets/coco'
+# data_dir = 'D:/datasets/coco'
+data_dir = 'D:/dataset_d/mscoco_yolo'
 
 
 def train(args, params):
@@ -59,7 +60,8 @@ def train(args, params):
 
     if args.distributed:
         sampler = data.distributed.DistributedSampler(dataset)
-
+    
+    # loading data
     loader = data.DataLoader(dataset, args.batch_size, sampler is None, sampler,
                              num_workers=8, pin_memory=True, collate_fn=Dataset.collate_fn)
 
@@ -81,7 +83,7 @@ def train(args, params):
     amp_scale = torch.amp.GradScaler()
     criterion = util.ComputeLoss(model, params)
 
-    with open('weights/step.csv', 'w') as log:
+    with open('weights/step.csv', 'w', newline='') as log:
         if args.local_rank == 0:
             logger = csv.DictWriter(log, fieldnames=['epoch',
                                                      'box', 'cls', 'dfl',

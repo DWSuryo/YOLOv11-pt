@@ -446,7 +446,7 @@ class EMA:
     Keeps a moving average of everything in the model state_dict (parameters and buffers)
     For EMA details see https://www.tensorflow.org/api_docs/python/tf/train/ExponentialMovingAverage
     """
-    print("entering util.EMA")
+    # print("entering util.EMA")
     def __init__(self, model, decay=0.9999, tau=2000, updates=0):
         # Create EMA
         self.ema = copy.deepcopy(model).eval()  # FP32 EMA
@@ -517,6 +517,7 @@ class Assigner(torch.nn.Module):
         ind = torch.zeros([2, batch_size, num_max_boxes], dtype=torch.long)  # 2, b, max_num_obj
         ind[0] = torch.arange(end=batch_size).view(-1, 1).expand(-1, num_max_boxes)  # b, max_num_obj
         ind[1] = gt_labels.squeeze(-1)  # b, max_num_obj
+        # print(f"diagnose: {pd_scores}, {ind[0]}, {ind[1]}")
         bbox_scores[gt_mask] = pd_scores[ind[0], :, ind[1]][gt_mask]  # b, max_num_obj, h*w
 
         pd_boxes = pd_bboxes.unsqueeze(1).expand(-1, num_max_boxes, -1, -1)[gt_mask]
