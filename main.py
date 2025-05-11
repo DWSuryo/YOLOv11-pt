@@ -230,17 +230,38 @@ def train(args, params):
     
     # Plot mAP vs. epochs using Matplotlib
     import matplotlib.pyplot as plt
-    plt.figure()
-    # plt.plot(epoch_list, mAP_list, marker='o', label='mAP')
-    plt.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
+    # plt.figure()
+    # # plt.plot(epoch_list, mAP_list, marker='o', label='mAP')
+    # plt.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
+    # # Highlight best mAP epoch
+    # plt.scatter(best_epoch, best_mAP, color='red', label=f'Best mAP at epoch {best_epoch}', zorder=3)
+    # plt.xlabel('Epoch')
+    # plt.ylabel('mAP')
+    # plt.title(f'mAP vs. Epochs (YOLOv11{version} at {args.epochs})')
+    # plt.ylim(0,1)
+    # plt.grid(True)
+    # plt.legend()
+
+    # Create subplots
+    fig, ax = plt.subplots(figsize=(9, 6), tight_layout=True)
+    # Plot mAP vs. epochs
+    ax.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
     # Highlight best mAP epoch
-    plt.scatter(best_epoch, best_mAP, color='red', label=f'Best mAP at epoch {best_epoch}', zorder=3)
-    plt.xlabel('Epoch')
-    plt.ylabel('mAP')
-    plt.title(f'mAP vs. Epochs ({args.epochs})')
-    plt.ylim(0,1)
-    plt.grid(True)
-    plt.legend()
+    ax.scatter(best_epoch, best_mAP, color='red', label=f'Best mAP at epoch {best_epoch}', zorder=3)
+    # Set axis limits
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("mAP")
+    ax.set_ylim(0, 1)  # Set y-axis scale from 0 to 1
+    ax.grid(True)
+    # Set title and subtitle
+    # version = "YOLOv11 version n"  # Change this dynamically based on actual version
+    # epochs = last_epoch  # Total epochs
+    fig.suptitle("mAP vs. Epochs", fontsize=14, fontweight="bold")
+    ax.set_title(f"YOLOv11 version {version} at {args.epochs} epochs", fontsize=12)
+    # Position legend above the graph
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=False)
+    # ax.legend(loc="outside upper center")
+
     plt.savefig(f"./weights/mAP_vs_epochs_{version}_{args.epochs}.png")
     plt.close()
 
