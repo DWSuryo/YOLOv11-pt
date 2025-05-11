@@ -32,18 +32,24 @@ class Dataset(data.Dataset):
 
     def __getitem__(self, index):
         index = self.indices[index]
+        filename = self.filenames[index]  # Get the filename for the current index
+        # print(index,"\t\t", filename)
 
         if self.mosaic and random.random() < self.params['mosaic']:
+            # print("mosaic mode")
             # Load MOSAIC
-            image, label = self.load_mosaic(index, self.params)
+            image, label = self.load_mosaic(index, self.params, filename)
+            # print to verify if the number of labels match the image
+            # print(f"labels of {index}\t: {len(label)}\t{filename}")
             # MixUp augmentation
             if random.random() < self.params['mix_up']:
                 index = random.choice(self.indices)
                 mix_image1, mix_label1 = image, label
-                mix_image2, mix_label2 = self.load_mosaic(index, self.params)
+                mix_image2, mix_label2 = self.load_mosaic(index, self.params, filename)
 
                 image, label = mix_up(mix_image1, mix_label1, mix_image2, mix_label2)
         else:
+            # print("no mosaic mode")
             # Load image
             image, shape = self.load_image(index)
             h, w = image.shape[:2]
@@ -56,8 +62,15 @@ class Dataset(data.Dataset):
                 label[:, 1:] = wh2xy(label[:, 1:], ratio[0] * w, ratio[1] * h, pad[0], pad[1])
             if self.augment:
                 image, label = random_perspective(image, label, self.params)
+            # print to verify if the number of labels match the image
+            # print(f"labels of non-mosaic {index}\t: {len(label)}\t{filename}")
 
+        # print(f"labels of overall {index}\t: {len(label)}\t{filename}")
         nl = len(label)  # number of labels
+
+        # # check if number of labels are zero (0)
+        # assert nl, f"detected {nl} labels for file number {index} ({filename})"  # Include index and filename
+
         h, w = image.shape[:2]
         # cls = label[:, 0:1]
         # box = label[:, 1:5]
@@ -92,7 +105,7 @@ class Dataset(data.Dataset):
             if cls.ndim == 1:
                 cls = cls.reshape(-1, 1)
             target_cls = torch.from_numpy(cls)
-            target_box = torch.from_numpy(box)        
+            target_box = torch.from_numpy(box)
 
         # Convert HWC to CHW, BGR to RGB
         sample = image.transpose((2, 0, 1))[::-1]
@@ -104,6 +117,7 @@ class Dataset(data.Dataset):
         return len(self.filenames)
 
     def load_image(self, i):
+        # print(self.filenames[i])
         image = cv2.imread(self.filenames[i])
         h, w = image.shape[:2]
         r = self.input_size / max(h, w)
@@ -113,7 +127,8 @@ class Dataset(data.Dataset):
                                interpolation=resample() if self.augment else cv2.INTER_LINEAR)
         return image, (h, w)
 
-    def load_mosaic(self, index, params):
+    def load_mosaic(self, index, params, filename):
+        # print(index, "\t", filename)
         label4 = []
         border = [-self.input_size // 2, -self.input_size // 2]
         image4 = numpy.full((self.input_size * 2, self.input_size * 2, 3), 0, dtype=numpy.uint8)
@@ -124,6 +139,7 @@ class Dataset(data.Dataset):
 
         indices = [index] + random.choices(self.indices, k=3)
         random.shuffle(indices)
+        # print(indices)
 
         for i, index in enumerate(indices):
             # Load image
@@ -173,6 +189,7 @@ class Dataset(data.Dataset):
             # Labels
             label = self.labels[index].copy()
             # # debugging labels
+            # print(f"Image of label (non-mosaic, index {index}): {self.filenames[index]})")
             # print(f"Shape of label (non-mosaic, index {index}): {label.shape}")
             # print(f"Content of label (non-mosaic, index {index}):\n{label}")
             if len(label):
@@ -233,6 +250,7 @@ class Dataset(data.Dataset):
             return torch.load(path)
         else:
             print("cache not loaded")
+        # nothing = 0   # troubleshooting files without labels
         x = {}
         for filename in tqdm(filenames):
             # print(filename)
@@ -262,6 +280,7 @@ class Dataset(data.Dataset):
                         # print(label)
                         label = numpy.array(label, dtype=numpy.float32)
                     nl = len(label)
+                    # print(f"cache label {nl}\t{file_txt}")
                     if nl:
                         assert (label >= 0).all()
                         assert label.shape[1] == 5
@@ -270,14 +289,21 @@ class Dataset(data.Dataset):
                         if len(i) < nl:  # duplicate row check
                             label = label[i]  # remove duplicates
                     else:
+                        # print(f"no label:\t{file_txt}")
+                        # nothing += 1
                         label = numpy.zeros((0, 5), dtype=numpy.float32)
                 else:
+                    # print(f"no file:\t{file_txt}")
+                    # nothing += 1
                     label = numpy.zeros((0, 5), dtype=numpy.float32)
             except FileNotFoundError:
+                # nothing += 1
                 label = numpy.zeros((0, 5), dtype=numpy.float32)
             except AssertionError:
+                # nothing += 1
                 continue
             x[filename] = label
+        # print(f"nothing: {nothing}")
         torch.save(x, path)
         return x
 

@@ -22,7 +22,20 @@ data_dir = 'D:/dataset_d/mscoco_yolo'
 
 def train(args, params):
     # Model
-    model = nn.yolo_v11_n(len(params['names']))
+    version = args.version
+    if version == 'n':
+        model = nn.yolo_v11_n(len(params['names']))
+    elif version == 's':
+        model = nn.yolo_v11_s(len(params['names']))
+    elif version == 'm':
+        model = nn.yolo_v11_m(len(params['names']))
+    elif version == 'l':
+        model = nn.yolo_v11_l(len(params['names']))
+    elif version == 'x':
+        model = nn.yolo_v11_x(len(params['names']))
+    else:
+        raise ValueError(f"Unsupported YOLOv11 variant: {version}. Choose from 'n', 's', 'm', 'l', 'x'.")
+    # model = nn.yolo_v11_m(len(params['names']))
     model.cuda()
 
     # Optimizer
@@ -40,6 +53,7 @@ def train(args, params):
         for filename in f.readlines():
             filename = os.path.basename(filename.rstrip())
             filenames.append(f'{data_dir}/images/train2017/' + filename)
+            # filenames.append(f'./images/train2017/' + filename)
         print("filename lists: ", len(filenames))
 
     # check if file exists
@@ -57,6 +71,7 @@ def train(args, params):
 
     sampler = None
     dataset = Dataset(filenames, args.input_size, params, augment=True)
+    # dataset = Dataset(filenames, args.input_size, params, augment=True, data_dir=data_dir)
 
     if args.distributed:
         sampler = data.distributed.DistributedSampler(dataset)
@@ -83,12 +98,18 @@ def train(args, params):
     amp_scale = torch.amp.GradScaler()
     criterion = util.ComputeLoss(model, params)
 
-    with open('weights/step.csv', 'w', newline='') as log:
+    csv_file = f'weights/step_{version}_{args.epochs}.csv' 
+    # Initialize lists to record mAP and epoch numbers
+    mAP_list = []
+    epoch_list = []
+    # Write file
+    with open(csv_file, 'w', newline='') as log:
         if args.local_rank == 0:
             logger = csv.DictWriter(log, fieldnames=['epoch',
                                                      'box', 'cls', 'dfl',
                                                      'Recall', 'Precision', 'mAP@50', 'mAP'])
             logger.writeheader()
+
 
         for epoch in range(args.epochs):
             model.train()
@@ -155,6 +176,9 @@ def train(args, params):
             if args.local_rank == 0:
                 # mAP
                 last = test(args, params, ema.ema)
+                current_mAP = last[0]  # mAP computed from test()
+                mAP_list.append(current_mAP)
+                epoch_list.append(epoch + 1)
 
                 logger.writerow({'epoch': str(epoch + 1).zfill(3),
                                  'box': str(f'{avg_box_loss.avg:.3f}'),
@@ -167,8 +191,10 @@ def train(args, params):
                 log.flush()
 
                 # Update best mAP
-                if last[0] > best:
-                    best = last[0]
+                # if last[0] > best:
+                #     best = last[0]
+                if current_mAP > best:
+                    best = current_mAP
 
                 # Save model
                 save = {'epoch': epoch + 1,
@@ -178,32 +204,67 @@ def train(args, params):
                 # print(save['model'])
 
                 # Save last, best and delete
-                torch.save(save, f='./weights/last.pt')
-                if best == last[0]:
-                    torch.save(save, f='./weights/best.pt')
+                torch.save(save, f=f'./weights/last_{version}_{args.epochs}.pt')
+                # if best == last[0]:
+                if best == current_mAP:
+                    torch.save(save, f=f'./weights/best_{version}_{args.epochs}.pt')
                 del save
 
     if args.local_rank == 0:
-        util.strip_optimizer('./weights/best.pt')  # strip optimizers
-        util.strip_optimizer('./weights/last.pt')  # strip optimizers
+        # Finalize logging and close file.
+        # log.close()
+        util.strip_optimizer(f'./weights/last_{version}_{args.epochs}.pt')  # strip optimizers
+        util.strip_optimizer(f'./weights/best_{version}_{args.epochs}.pt')  # strip optimizers
+
+    with open(csv_file, "r") as file:
+        reader = csv.DictReader(file)  # Reads as a dictionary
+        for row in reader:
+            epoch_list.append(int(row["epoch"]))  # Convert epoch to integer
+            mAP_list.append(float(row["mAP"]))    # Convert mAP to float
+
+    # Find the best mAP and corresponding epoch
+    best_mAP = max(mAP_list)
+    best_epoch = epoch_list[mAP_list.index(best_mAP)]
+    last_mAP = mAP_list[-1]
+    last_epoch = epoch_list[-1]
+    
+    # Plot mAP vs. epochs using Matplotlib
+    import matplotlib.pyplot as plt
+    plt.figure()
+    # plt.plot(epoch_list, mAP_list, marker='o', label='mAP')
+    plt.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
+    # Highlight best mAP epoch
+    plt.scatter(best_epoch, best_mAP, color='red', label=f'Best mAP at epoch {best_epoch}', zorder=3)
+    plt.xlabel('Epoch')
+    plt.ylabel('mAP')
+    plt.title(f'mAP vs. Epochs ({args.epochs})')
+    plt.ylim(0,1)
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(f"./weights/mAP_vs_epochs_{version}_{args.epochs}.png")
+    plt.close()
 
 
 @torch.no_grad()
 def test(args, params, model=None):
+    version = args.version
+    epochs = args.epochs
     filenames = []
     with open(f'{data_dir}/val2017.txt') as f:
         for filename in f.readlines():
             filename = os.path.basename(filename.rstrip())
             filenames.append(f'{data_dir}/images/val2017/' + filename)
+            # filenames.append(f'./images/val2017/' + filename)
 
     dataset = Dataset(filenames, args.input_size, params, augment=False)
+    # dataset = Dataset(filenames, args.input_size, params, augment=False, data_dir=data_dir)
     loader = data.DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4,
                              pin_memory=True, collate_fn=Dataset.collate_fn)
 
     plot = False
     if not model:
         plot = True
-        model = torch.load(f='./weights/best.pt', map_location='cuda')
+        model = torch.load(f=f'./weights/best_{version}_{args.epochs}.pt', map_location='cuda')
         model = model['model'].float().fuse()
 
     model.half()
@@ -254,7 +315,7 @@ def test(args, params, model=None):
     # Compute metrics
     metrics = [torch.cat(x, dim=0).cpu().numpy() for x in zip(*metrics)]  # to numpy
     if len(metrics) and metrics[0].any():
-        tp, fp, m_pre, m_rec, map50, mean_ap = util.compute_ap(*metrics, plot=plot, names=params["names"])
+        tp, fp, m_pre, m_rec, map50, mean_ap = util.compute_ap(version, epochs, *metrics, plot=plot, names=params["names"])
     # Print results
     print(('%10s' + '%10.3g' * 4) % ('', m_pre, m_rec, map50, mean_ap))
     # Return results
@@ -265,6 +326,7 @@ def test(args, params, model=None):
 def profile(args, params):
     import thop
     shape = (1, 3, args.input_size, args.input_size)
+    print(f"params amount: {len(params['names'])}")
     model = nn.yolo_v11_n(len(params['names'])).fuse()
 
     model.eval()
@@ -291,8 +353,10 @@ def main():
     parser.add_argument('--epochs', default=600, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
+    parser.add_argument('--version', default='m', type=str)
 
     args = parser.parse_args()
+    print(args)
 
     args.local_rank = int(os.getenv('LOCAL_RANK', 0))
     args.world_size = int(os.getenv('WORLD_SIZE', 1))

@@ -1,6 +1,7 @@
 import copy
 import random
 from time import time
+import pathlib
 
 import math
 import numpy
@@ -222,7 +223,7 @@ def plot_curve(px, py, names, save_dir, x_label="Confidence", y_label="Metric"):
     pyplot.close(figure)
 
 
-def compute_ap(tp, conf, output, target, plot=False, names=(), eps=1E-16):
+def compute_ap(version, epochs, tp, conf, output, target, plot=False, names=(), eps=1E-16):
     """
     Compute the average precision, given the recall and precision curves.
     Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
@@ -286,10 +287,10 @@ def compute_ap(tp, conf, output, target, plot=False, names=(), eps=1E-16):
     if plot:
         names = dict(enumerate(names))  # to dict
         names = [v for k, v in names.items() if k in unique_classes]  # list: only classes that have data
-        plot_pr_curve(px, py, ap, names, save_dir="./weights/PR_curve.png")
-        plot_curve(px, f1, names, save_dir="./weights/F1_curve.png", y_label="F1")
-        plot_curve(px, p, names, save_dir="./weights/P_curve.png", y_label="Precision")
-        plot_curve(px, r, names, save_dir="./weights/R_curve.png", y_label="Recall")
+        plot_pr_curve(px, py, ap, names, save_dir=f"./weights/PR_curve_{version}_{epochs}.png")
+        plot_curve(px, f1, names, save_dir=f"./weights/F1_curve_{version}_{epochs}.png", y_label="F1")
+        plot_curve(px, p, names, save_dir=f"./weights/P_curve_{version}_{epochs}.png", y_label="Precision")
+        plot_curve(px, r, names, save_dir=f"./weights/R_curve_{version}_{epochs}.png", y_label="Recall")
     i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
@@ -336,7 +337,7 @@ def strip_optimizer(filename):
     for p in x['model'].parameters():
         p.requires_grad = False
     # torch.save(x['model'], f=f"{filename}.pt")
-    torch.save(x['model'].state_dict(), f=f"{filename}_state_dict.pt")
+    torch.save(x['model'].state_dict(), f=f"{pathlib.Path(filename).stem}_state_dict.pt")
 
 
 def clip_gradients(model, max_norm=10.0):

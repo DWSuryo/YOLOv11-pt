@@ -176,3 +176,5 @@ cython_debug/
 # pytorch weights
 weights/*.pt
 weights/*.pth
+weights/*.png
+!weights/lr.png
