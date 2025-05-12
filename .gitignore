@@ -178,3 +178,4 @@ weights/*.pt
 weights/*.pth
 weights/*.png
 !weights/lr.png
+*.zip

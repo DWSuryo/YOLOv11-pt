@@ -180,7 +180,8 @@ def smooth(y, f=0.1):
 
 def plot_pr_curve(px, py, ap, names, save_dir):
     from matplotlib import pyplot
-    fig, ax = pyplot.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+    # fig, ax = pyplot.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+    fig, ax = pyplot.subplots(1, 1, figsize=(5,5), layout='constrained')
     py = numpy.stack(py, axis=1)
 
     if 0 < len(names) < 21:  # display per-class legend if < 21 classes
@@ -194,8 +195,9 @@ def plot_pr_curve(px, py, ap, names, save_dir):
     ax.set_ylabel("Precision")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    # ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     ax.set_title("Precision-Recall Curve")
+    fig.legend(loc="outside lower center")
     fig.savefig(save_dir, dpi=250)
     pyplot.close(fig)
 
@@ -203,7 +205,8 @@ def plot_pr_curve(px, py, ap, names, save_dir):
 def plot_curve(px, py, names, save_dir, x_label="Confidence", y_label="Metric"):
     from matplotlib import pyplot
 
-    figure, ax = pyplot.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+    # figure, ax = pyplot.subplots(1, 1, figsize=(9, 6), tight_layout=True)
+    figure, ax = pyplot.subplots(1, 1, figsize=(5,5), layout="constrained")
 
     if 0 < len(names) < 21:  # display per-class legend if < 21 classes
         for i, y in enumerate(py):
@@ -217,8 +220,9 @@ def plot_curve(px, py, names, save_dir, x_label="Confidence", y_label="Metric"):
     ax.set_ylabel(y_label)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     ax.set_title(f"{y_label}-Confidence Curve")
+    # ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    figure.legend(loc="outside lower center")
     figure.savefig(save_dir, dpi=250)
     pyplot.close(figure)
 

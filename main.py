@@ -4,6 +4,7 @@ import os
 import warnings
 from argparse import ArgumentParser
 from datetime import datetime
+import zipfile
 
 import torch
 import tqdm
@@ -216,7 +217,11 @@ def train(args, params):
         util.strip_optimizer(f'./weights/last_{version}_{args.epochs}.pt')  # strip optimizers
         util.strip_optimizer(f'./weights/best_{version}_{args.epochs}.pt')  # strip optimizers
 
-    with open(csv_file, "r") as file:
+# CSV read and plot mAP function
+def plot_mAP(args):
+    mAP_list = []
+    epoch_list = []
+    with open(f"./weights/step_{args.version}_{args.epochs}.csv", "r") as file:
         reader = csv.DictReader(file)  # Reads as a dictionary
         for row in reader:
             epoch_list.append(int(row["epoch"]))  # Convert epoch to integer
@@ -243,7 +248,7 @@ def train(args, params):
     # plt.legend()
 
     # Create subplots
-    fig, ax = plt.subplots(figsize=(9, 6), tight_layout=True)
+    fig, ax = plt.subplots(1, 1, layout='constrained')
     # Plot mAP vs. epochs
     ax.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
     # Highlight best mAP epoch
@@ -256,15 +261,14 @@ def train(args, params):
     # Set title and subtitle
     # version = "YOLOv11 version n"  # Change this dynamically based on actual version
     # epochs = last_epoch  # Total epochs
-    fig.suptitle("mAP vs. Epochs", fontsize=14, fontweight="bold")
-    ax.set_title(f"YOLOv11 version {version} at {args.epochs} epochs", fontsize=12)
+    fig.suptitle("mAP vs. Epochs")
+    ax.set_title(f"YOLOv11 version {args.version} at {args.epochs} epochs")
     # Position legend above the graph
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=False)
-    # ax.legend(loc="outside upper center")
+    # ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=False)
+    fig.legend(loc="outside lower center")
 
-    plt.savefig(f"./weights/mAP_vs_epochs_{version}_{args.epochs}.png")
+    plt.savefig(f"./weights/mAP_vs_epochs_{args.version}_{args.epochs}.png")
     plt.close()
-
 
 @torch.no_grad()
 def test(args, params, model=None):
@@ -332,6 +336,9 @@ def test(args, params, model=None):
                 metric = util.compute_metric(output[:, :6], target, iou_v)
             # Append
             metrics.append((metric, output[:, 4], output[:, 5], cls.squeeze(-1)))
+    
+    # Computer mAP
+    plot_mAP(args)
 
     # Compute metrics
     metrics = [torch.cat(x, dim=0).cpu().numpy() for x in zip(*metrics)]  # to numpy
@@ -361,6 +368,32 @@ def profile(args, params):
         print(f'Number of parameters: {num_params}')
         print(f'Number of FLOPs: {flops}')
 
+def zip_weights_directory(args):
+    weights_dir = "./weights/"
+    files_to_zip = []
+
+    # Ensure weights directory exists
+    if not os.path.exists(weights_dir):
+        print("Error: ./weights/ directory does not exist.")
+        return
+
+    # Collect matching files
+    for filename in os.listdir(weights_dir):
+        if f"_{args.version}_{args.epochs}." in filename or f"_{args.version}_{args.epochs}_state_dict." in filename:  # Match file_n_x.suffix format
+            files_to_zip.append(os.path.join(weights_dir, filename))
+    print(files_to_zip)
+
+    if not files_to_zip:
+        print("No matching files found to zip.")
+        return
+
+    # Create ZIP file
+    output_zip = f"result_{args.version}_{args.epochs}.zip"
+    with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for file in files_to_zip:
+            zipf.write(file, os.path.basename(file))
+
+    print(f"Successfully created {output_zip} containing {len(files_to_zip)} files.")
 
 def main():
     time_start = datetime.now()
@@ -375,6 +408,7 @@ def main():
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--version', default='m', type=str)
+    parser.add_argument('--zip', action='store_true')
 
     args = parser.parse_args()
     print(args)
@@ -411,6 +445,9 @@ def main():
     if args.distributed:
         torch.distributed.destroy_process_group()
     torch.cuda.empty_cache()
+
+    if args.zip:
+        zip_weights_directory(args)
 
     time_end = datetime.now()
     print("Finished at Date and Time:", time_end.strftime("%Y-%m-%d %H:%M:%S"))
