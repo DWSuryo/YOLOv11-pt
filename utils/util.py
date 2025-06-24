@@ -778,3 +778,60 @@ class ComputeLoss:
         loss_dfl *= self.params['dfl']  # dfl gain
 
         return loss_box, loss_cls, loss_dfl
+    
+class Colors:
+    def __init__(self):
+        hexs = (
+            "042AFF", "0BDBEB", "F3F3F3", "00DFB7", "111F68", "FF6FDD",
+            "FF444F",
+            "CCED00", "00F344", "BD00FF", "00B4FF", "DD00BA", "00FFFF",
+            "26C000",
+            "01FFB3", "7D24FF", "7B0068", "FF1B6C", "FC6D2F", "A2FF0B"
+        )
+        self.palette = [self.hex2rgb(f"#{c}") for c in hexs]
+        self.n = len(self.palette)
+        self.pose_palette = numpy.array([
+            [255, 128, 0], [255, 153, 51], [255, 178, 102], [230, 230, 0],
+            [255, 153, 255], [153, 204, 255], [255, 102, 255], [255, 51, 255],
+            [102, 178, 255], [51, 153, 255], [255, 153, 153], [255, 102, 102],
+            [255, 51, 51], [153, 255, 153], [102, 255, 102], [51, 255, 51],
+            [0, 255, 0], [0, 0, 255], [255, 0, 0], [255, 255, 255]
+        ], dtype=numpy.uint8)
+
+    def __call__(self, i, bgr=False):
+        c = self.palette[int(i) % self.n]
+        return c[::-1] if bgr else c
+
+    @staticmethod
+    def hex2rgb(h):
+        return tuple(int(h[1 + i:1 + i + 2], 16) for i in (0, 2, 4))
+
+def draw_box(im, box, index, label=""):
+    import cv2
+    color = Colors()(index, True)
+    x1, y1, x2, y2 = map(int, box[:4])
+    cv2.rectangle(im, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+
+    if label:
+        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)
+        h += 3
+        outside = y1 < h + 3
+        if x1 + w > im.shape[1]:
+            x1 = im.shape[1] - w
+        y2_label = y1 + h if outside else y1 - h
+        cv2.rectangle(im, (x1, y1), (x1 + w, y2_label), color, -1)
+
+        # Draw corner markers
+        corners = [
+            ((x1, y1), (x1 + 15, y1), (x1, y1 + 15)),  # Top-left
+            ((x2, y2), (x2 - 15, y2), (x2, y2 - 15)),  # Bottom-right
+            ((x2, y1), (x2 - 15, y1), (x2, y1 + 15)),  # Top-right
+            ((x1, y2), (x1, y2 - 15), (x1 + 15, y2)),  # Bottom-left
+        ]
+        for center, *lines in corners:
+            for pt in lines:
+                cv2.line(im, center, pt, (0, 255, 255), 3)
+
+        cv2.putText(im, label, (x1, y1 + h - 3 if outside else y1 - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    return im

@@ -72,10 +72,10 @@ class Dataset(data.Dataset):
         # assert nl, f"detected {nl} labels for file number {index} ({filename})"  # Include index and filename
 
         h, w = image.shape[:2]
-        # cls = label[:, 0:1]
-        # box = label[:, 1:5]
-        cls = label[:, 0:1] if nl > 0 and label.ndim > 1 else numpy.empty((0, 1), dtype=numpy.float32)
-        box = label[:, 1:5] if nl > 0 and label.ndim > 1 else numpy.empty((0, 4), dtype=numpy.float32)
+        cls = label[:, 0:1]
+        box = label[:, 1:5]
+        # cls = label[:, 0:1] if nl > 0 and label.ndim > 1 else numpy.empty((0, 1), dtype=numpy.float32)
+        # box = label[:, 1:5] if nl > 0 and label.ndim > 1 else numpy.empty((0, 4), dtype=numpy.float32)
         box = xy2wh(box, w, h)
 
         if self.augment:

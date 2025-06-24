@@ -10,6 +10,8 @@ import torch
 import tqdm
 import yaml
 from torch.utils import data
+import cv2
+import numpy as np
 
 from nets import nn
 from utils import util
@@ -216,6 +218,7 @@ def train(args, params):
         # log.close()
         util.strip_optimizer(f'./weights/last_{version}_{args.epochs}.pt')  # strip optimizers
         util.strip_optimizer(f'./weights/best_{version}_{args.epochs}.pt')  # strip optimizers
+    plot_mAP(args)
 
 # CSV read and plot mAP function
 def plot_mAP(args):
@@ -224,6 +227,7 @@ def plot_mAP(args):
     with open(f"./weights/step_{args.version}_{args.epochs}.csv", "r") as file:
         reader = csv.DictReader(file)  # Reads as a dictionary
         for row in reader:
+            print(row)
             epoch_list.append(int(row["epoch"]))  # Convert epoch to integer
             mAP_list.append(float(row["mAP"]))    # Convert mAP to float
 
@@ -232,20 +236,8 @@ def plot_mAP(args):
     best_epoch = epoch_list[mAP_list.index(best_mAP)]
     last_mAP = mAP_list[-1]
     last_epoch = epoch_list[-1]
-    
     # Plot mAP vs. epochs using Matplotlib
     import matplotlib.pyplot as plt
-    # plt.figure()
-    # # plt.plot(epoch_list, mAP_list, marker='o', label='mAP')
-    # plt.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
-    # # Highlight best mAP epoch
-    # plt.scatter(best_epoch, best_mAP, color='red', label=f'Best mAP at epoch {best_epoch}', zorder=3)
-    # plt.xlabel('Epoch')
-    # plt.ylabel('mAP')
-    # plt.title(f'mAP vs. Epochs (YOLOv11{version} at {args.epochs})')
-    # plt.ylim(0,1)
-    # plt.grid(True)
-    # plt.legend()
 
     # Create subplots
     fig, ax = plt.subplots(1, 1, layout='constrained')
@@ -289,6 +281,9 @@ def test(args, params, model=None):
     plot = False
     if not model:
         plot = True
+        # pretrained
+        # model = torch.load(f=f'./weights/best.pt', map_location='cuda')
+        # custom
         model = torch.load(f=f'./weights/best_{version}_{args.epochs}.pt', map_location='cuda')
         model = model['model'].float().fuse()
 
@@ -337,8 +332,8 @@ def test(args, params, model=None):
             # Append
             metrics.append((metric, output[:, 4], output[:, 5], cls.squeeze(-1)))
     
-    # Computer mAP
-    plot_mAP(args)
+    # # Compute mAP
+    # plot_mAP(args)
 
     # Compute metrics
     metrics = [torch.cat(x, dim=0).cpu().numpy() for x in zip(*metrics)]  # to numpy
@@ -355,7 +350,20 @@ def profile(args, params):
     import thop
     shape = (1, 3, args.input_size, args.input_size)
     print(f"params amount: {len(params['names'])}")
-    model = nn.yolo_v11_n(len(params['names'])).fuse()
+    version = args.version
+    if version == 'n':
+        model = nn.yolo_v11_n(len(params['names'])).fuse()
+    elif version == 's':
+        model = nn.yolo_v11_s(len(params['names'])).fuse()
+    elif version == 'm':
+        model = nn.yolo_v11_m(len(params['names'])).fuse()
+    elif version == 'l':
+        model = nn.yolo_v11_l(len(params['names'])).fuse()
+    elif version == 'x':
+        model = nn.yolo_v11_x(len(params['names'])).fuse()
+    else:
+        raise ValueError(f"Unsupported YOLOv11 variant: {version}. Choose from 'n', 's', 'm', 'l', 'x'.")
+    # model = nn.yolo_v11_n(len(params['names'])).fuse()
 
     model.eval()
     model(torch.zeros(shape))
@@ -395,6 +403,121 @@ def zip_weights_directory(args):
 
     print(f"Successfully created {output_zip} containing {len(files_to_zip)} files.")
 
+def inference(model, args, params):
+    source_type = args.inference
+    if source_type == "image":
+        source_path = f"./src/stadium_crowd.jpg"
+        image = cv2.imread(source_path)
+        image = preprocess_image(image)
+        result = model(image)
+        visualize_result(result, image)
+
+    else:
+        # pretrained model
+        # model = torch.load(f'./weights/best.pt', 'cuda')["model"].float()
+        # custom model
+        model = torch.load(f'./weights/best_{args.version}_{args.epochs}.pt', 'cuda')['model'].float()
+        model.half()
+        model.eval()
+
+        if source_type == "video":
+            camera = cv2.VideoCapture('src/crowd1.mp4')
+        elif source_type == "camera":
+            camera = cv2.VideoCapture(0)
+
+        # Get video properties
+        width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = camera.get(cv2.CAP_PROP_FPS)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Define the codec
+        out = cv2.VideoWriter('output2.mp4', fourcc, fps, (width, height))
+
+        if not camera.isOpened():
+            print("Error opening video stream or file")
+
+        while camera.isOpened():
+            success, frame = camera.read()
+            if success:
+                image = frame.copy()
+                shape = image.shape[:2]
+
+                r = args.input_size / max(shape[0], shape[1])
+                if r != 1:
+                    resample = cv2.INTER_LINEAR if r > 1 else cv2.INTER_AREA
+                    image = cv2.resize(image, dsize=(int(shape[1] * r), int(shape[0] * r)), interpolation=resample)
+                height, width = image.shape[:2]
+
+                # Scale ratio (new / old)
+                r = min(1.0, args.input_size / height, args.input_size / width)
+
+                # Compute padding
+                pad = int(round(width * r)), int(round(height * r))
+                w = (args.input_size - pad[0]) / 2
+                h = (args.input_size - pad[1]) / 2
+
+                if (width, height) != pad:  # resize
+                    image = cv2.resize(image, pad, interpolation=cv2.INTER_LINEAR)
+                top, bottom = int(round(h - 0.1)), int(round(h + 0.1))
+                left, right = int(round(w - 0.1)), int(round(w + 0.1))
+                image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT)
+
+                # Convert HWC to CHW, BGR to RGB
+                x = image.transpose((2, 0, 1))[::-1]
+                x = np.ascontiguousarray(x)
+                x = torch.from_numpy(x)
+                x = x.unsqueeze(dim=0)
+                x = x.cuda()
+                x = x.half()
+                x = x / 255
+                # Inference
+                outputs = model(x)
+                # NMS
+                outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
+
+                if outputs is not None:
+                    outputs[:, [0, 2]] -= w
+                    outputs[:, [1, 3]] -= h
+                    outputs[:, :4] /= min(height / shape[0], width / shape[1])
+
+                    outputs[:, 0].clamp_(0, shape[1])
+                    outputs[:, 1].clamp_(0, shape[0])
+                    outputs[:, 2].clamp_(0, shape[1])
+                    outputs[:, 3].clamp_(0, shape[0])
+
+                    for box in outputs:
+                        box = box.cpu().numpy()
+                        x1, y1, x2, y2, score, index = box
+                        class_name = params['names'][int(index)]
+                        label = f"{class_name} {score:.2f}"
+                        util.draw_box(frame, box, index, label)
+
+                cv2.imshow('Frame', frame)
+                out.write(frame)
+                if cv2.waitKey(25) & 0xFF == ord('q'):
+                    break
+            else:
+                break
+        camera.release()
+        out.release()
+        cv2.destroyAllWindows()
+
+def preprocess_image(image):
+    """ Preprocess image for YOLOv11 model. """
+    image = cv2.resize(image, (640, 640))
+    image = torch.tensor(image).float().cuda() / 255.0
+    image = image.permute(2, 0, 1).unsqueeze(0)  # Convert to (B, C, H, W)
+    return image
+
+def visualize_result(result, image):
+    """ Overlay YOLOv11 detection results on the image. """
+    for detection in result:
+        # print(detection)
+        # print(f"Detection output shape: {detection.shape if hasattr(detection, 'shape') else len(detection)}")
+        x1, y1, x2, y2, conf, class_id = detection
+        cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+        cv2.putText(image, f"Class: {class_id}, Conf: {conf:.2f}", 
+                    (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
 def main():
     time_start = datetime.now()
     print("Started at Date and Time:", time_start.strftime("%Y-%m-%d %H:%M:%S"))
@@ -409,6 +532,8 @@ def main():
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--version', default='m', type=str)
     parser.add_argument('--zip', action='store_true')
+    parser.add_argument("--inference", type=str, choices=["image", "video", "camera"])
+    # parser.add_argument("--source", type=str)
 
     args = parser.parse_args()
     print(args)
@@ -448,6 +573,26 @@ def main():
 
     if args.zip:
         zip_weights_directory(args)
+
+    if args.inference:
+        # print(args.inference)
+        # version = args.version
+        # if version == 'n':
+        #     model = nn.yolo_v11_n(len(params['names']))
+        # elif version == 's':
+        #     model = nn.yolo_v11_s(len(params['names']))
+        # elif version == 'm':
+        #     model = nn.yolo_v11_m(len(params['names']))
+        # elif version == 'l':
+        #     model = nn.yolo_v11_l(len(params['names']))
+        # elif version == 'x':
+        #     model = nn.yolo_v11_x(len(params['names']))
+        # else:
+        #     raise ValueError(f"Unsupported YOLOv11 variant: {version}. Choose from 'n', 's', 'm', 'l', 'x'.")
+        model_path = f"./weights/best_{args.version}_{args.epochs}.pt"
+        model_data = torch.load(model_path, map_location="cuda")
+        model = model_data["model"].eval().cuda()
+        inference(model, args, params)
 
     time_end = datetime.now()
     print("Finished at Date and Time:", time_end.strftime("%Y-%m-%d %H:%M:%S"))
