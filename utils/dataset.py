@@ -247,7 +247,7 @@ class Dataset(data.Dataset):
         print(path)
         if os.path.exists(path):
             print("cache loaded")
-            return torch.load(path)
+            return torch.load(path, weights_only=False)
         else:
             print("cache not loaded")
         # nothing = 0   # troubleshooting files without labels

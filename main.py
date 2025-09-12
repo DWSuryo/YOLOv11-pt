@@ -20,7 +20,7 @@ from utils.dataset import Dataset
 warnings.filterwarnings("ignore")
 
 # data_dir = 'D:/datasets/coco'
-data_dir = 'D:/dataset_d/mscoco_yolo'
+data_dir = 'D:/dataset/coco-2017-download'
 
 
 def train(args, params):
@@ -187,8 +187,8 @@ def train(args, params):
                                  'box': str(f'{avg_box_loss.avg:.3f}'),
                                  'cls': str(f'{avg_cls_loss.avg:.3f}'),
                                  'dfl': str(f'{avg_dfl_loss.avg:.3f}'),
-                                 'mAP': str(f'{last[0]:.3f}'),
-                                 'mAP@50': str(f'{last[1]:.3f}'),
+                                 'mAP': str(f'{last[0]:.6f}'),
+                                 'mAP@50': str(f'{last[1]:.6f}'),
                                  'Recall': str(f'{last[2]:.3f}'),
                                  'Precision': str(f'{last[3]:.3f}')})
                 log.flush()
@@ -248,7 +248,8 @@ def plot_mAP(args):
     # Set axis limits
     ax.set_xlabel("Epoch")
     ax.set_ylabel("mAP")
-    ax.set_ylim(0, 1)  # Set y-axis scale from 0 to 1
+    # ax.set_xlim(0, max(epoch_list))
+    ax.set_ylim(0, max(mAP_list))  # Set y-axis scale from 0 to 1
     ax.grid(True)
     # Set title and subtitle
     # version = "YOLOv11 version n"  # Change this dynamically based on actual version
@@ -284,7 +285,7 @@ def test(args, params, model=None):
         # pretrained
         # model = torch.load(f=f'./weights/best.pt', map_location='cuda')
         # custom
-        model = torch.load(f=f'./weights/best_{version}_{args.epochs}.pt', map_location='cuda')
+        model = torch.load(f=f'./weights/best_{version}_{args.epochs}.pt', map_location='cuda', weights_only=False)
         model = model['model'].float().fuse()
 
     model.half()
@@ -343,6 +344,8 @@ def test(args, params, model=None):
     print(('%10s' + '%10.3g' * 4) % ('', m_pre, m_rec, map50, mean_ap))
     # Return results
     model.float()  # for training
+
+    # plot_mAP(args)
     return mean_ap, map50, m_rec, m_pre
 
 
@@ -416,7 +419,7 @@ def inference(model, args, params):
         # pretrained model
         # model = torch.load(f'./weights/best.pt', 'cuda')["model"].float()
         # custom model
-        model = torch.load(f'./weights/best_{args.version}_{args.epochs}.pt', 'cuda')['model'].float()
+        model = torch.load(f'./weights/best_{args.version}_{args.epochs}.pt', 'cuda', weights_only=False)['model'].float()
         model.half()
         model.eval()
 
@@ -590,7 +593,7 @@ def main():
         # else:
         #     raise ValueError(f"Unsupported YOLOv11 variant: {version}. Choose from 'n', 's', 'm', 'l', 'x'.")
         model_path = f"./weights/best_{args.version}_{args.epochs}.pt"
-        model_data = torch.load(model_path, map_location="cuda")
+        model_data = torch.load(model_path, map_location="cuda", weights_only=False)
         model = model_data["model"].eval().cuda()
         inference(model, args, params)
 
