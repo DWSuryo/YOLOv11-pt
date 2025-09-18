@@ -182,3 +182,7 @@ weights/*.png
 
 step_*.csv
 output*.mp4
+
+!weights/*best.pt
+!weights/*last.pt
+!weights/*step.csv

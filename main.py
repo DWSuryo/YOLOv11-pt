@@ -132,6 +132,7 @@ def train(args, params):
             avg_cls_loss = util.AverageMeter()
             avg_dfl_loss = util.AverageMeter()
             for i, (samples, targets) in p_bar:
+                # print(targets.keys())
 
                 step = i + num_steps * epoch
                 scheduler.step(step, optimizer)
@@ -410,15 +411,87 @@ def inference(model, args, params):
     source_type = args.inference
     if source_type == "image":
         source_path = f"./src/stadium_crowd.jpg"
-        image = cv2.imread(source_path)
-        image = preprocess_image(image)
-        result = model(image)
-        visualize_result(result, image)
+        frame = cv2.imread(source_path)
+
+        if frame is None:
+            print(f"Error: Could not read image from {source_path}")
+            return
+        
+        # Start timing for single image inference
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        start_event.record()
+        
+        # Preprocessing, Inference, and Post-processing for a single image
+        image = frame.copy()
+        shape = image.shape[:2]
+
+        r = args.input_size / max(shape[0], shape[1])
+        if r != 1:
+            resample = cv2.INTER_LINEAR if r > 1 else cv2.INTER_AREA
+            image = cv2.resize(image, dsize=(int(shape[1] * r), int(shape[0] * r)), interpolation=resample)
+        height, width = image.shape[:2]
+
+        # Scale ratio (new / old)
+        r = min(1.0, args.input_size / height, args.input_size / width)
+
+        # Compute padding
+        pad = int(round(width * r)), int(round(height * r))
+        w = (args.input_size - pad[0]) / 2
+        h = (args.input_size - pad[1]) / 2
+
+        if (width, height) != pad:
+            image = cv2.resize(image, pad, interpolation=cv2.INTER_LINEAR)
+        top, bottom = int(round(h - 0.1)), int(round(h + 0.1))
+        left, right = int(round(w - 0.1)), int(round(w + 0.1))
+        image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT)
+
+        # Convert HWC to CHW, BGR to RGB
+        x = image.transpose((2, 0, 1))[::-1]
+        x = np.ascontiguousarray(x)
+        x = torch.from_numpy(x)
+        x = x.unsqueeze(dim=0)
+        x = x.cuda()
+        x = x.half()
+        x = x / 255
+
+        # Inference
+        outputs = model(x)
+        # NMS
+        outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
+        
+        # End timing and calculate latency
+        end_event.record()
+        torch.cuda.synchronize()
+        latency_ms = start_event.elapsed_time(end_event)
+        
+        if outputs is not None:
+            outputs[:, [0, 2]] -= w
+            outputs[:, [1, 3]] -= h
+            outputs[:, :4] /= min(height / shape[0], width / shape[1])
+            outputs[:, 0].clamp_(0, shape[1])
+            outputs[:, 1].clamp_(0, shape[0])
+            outputs[:, 2].clamp_(0, shape[1])
+            outputs[:, 3].clamp_(0, shape[0])
+            for box in outputs:
+                box = box.cpu().numpy()
+                x1, y1, x2, y2, score, index = box
+                class_name = params['names'][int(index)]
+                label = f"{class_name} {score:.2f}"
+                util.draw_box(frame, box, index, label)
+
+        # Display latency on the image
+        latency_text = f"Latency: {latency_ms:.2f} ms"
+        cv2.putText(frame, latency_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        cv2.imshow('Inference Result', frame)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     else:
-        # pretrained model
-        # model = torch.load(f'./weights/best.pt', 'cuda')["model"].float()
-        # custom model
+        # The existing code for video and camera inference (which works)
+        # This part remains unchanged
         model = torch.load(f'./weights/best_{args.version}_{args.epochs}.pt', 'cuda', weights_only=False)['model'].float()
         model.half()
         model.eval()
@@ -432,39 +505,49 @@ def inference(model, args, params):
         width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = camera.get(cv2.CAP_PROP_FPS)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Define the codec
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter('output2.mp4', fourcc, fps, (width, height))
 
         if not camera.isOpened():
             print("Error opening video stream or file")
+            return
+
+        start_time = datetime.now()
+        frame_count = 0
+        fps_display = 0.0
+        
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
 
         while camera.isOpened():
             success, frame = camera.read()
             if success:
+                frame_count += 1
+                current_time = datetime.now()
+                elapsed_time = (current_time - start_time).total_seconds()
+                if elapsed_time > 1.0:
+                    fps_display = frame_count / elapsed_time
+                    frame_count = 0
+                    start_time = current_time
+
+                start_event.record()
+
                 image = frame.copy()
                 shape = image.shape[:2]
-
                 r = args.input_size / max(shape[0], shape[1])
                 if r != 1:
                     resample = cv2.INTER_LINEAR if r > 1 else cv2.INTER_AREA
                     image = cv2.resize(image, dsize=(int(shape[1] * r), int(shape[0] * r)), interpolation=resample)
                 height, width = image.shape[:2]
-
-                # Scale ratio (new / old)
                 r = min(1.0, args.input_size / height, args.input_size / width)
-
-                # Compute padding
                 pad = int(round(width * r)), int(round(height * r))
                 w = (args.input_size - pad[0]) / 2
                 h = (args.input_size - pad[1]) / 2
-
-                if (width, height) != pad:  # resize
+                if (width, height) != pad:
                     image = cv2.resize(image, pad, interpolation=cv2.INTER_LINEAR)
                 top, bottom = int(round(h - 0.1)), int(round(h + 0.1))
                 left, right = int(round(w - 0.1)), int(round(w + 0.1))
                 image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT)
-
-                # Convert HWC to CHW, BGR to RGB
                 x = image.transpose((2, 0, 1))[::-1]
                 x = np.ascontiguousarray(x)
                 x = torch.from_numpy(x)
@@ -472,27 +555,30 @@ def inference(model, args, params):
                 x = x.cuda()
                 x = x.half()
                 x = x / 255
-                # Inference
                 outputs = model(x)
-                # NMS
                 outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
-
+                end_event.record()
+                torch.cuda.synchronize()
+                latency_ms = start_event.elapsed_time(end_event)
                 if outputs is not None:
                     outputs[:, [0, 2]] -= w
                     outputs[:, [1, 3]] -= h
                     outputs[:, :4] /= min(height / shape[0], width / shape[1])
-
                     outputs[:, 0].clamp_(0, shape[1])
                     outputs[:, 1].clamp_(0, shape[0])
                     outputs[:, 2].clamp_(0, shape[1])
                     outputs[:, 3].clamp_(0, shape[0])
-
                     for box in outputs:
                         box = box.cpu().numpy()
                         x1, y1, x2, y2, score, index = box
                         class_name = params['names'][int(index)]
                         label = f"{class_name} {score:.2f}"
                         util.draw_box(frame, box, index, label)
+                
+                fps_text = f"FPS: {fps_display:.2f}"
+                latency_text = f"Latency: {latency_ms:.2f} ms"
+                cv2.putText(frame, fps_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(frame, latency_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
                 cv2.imshow('Frame', frame)
                 out.write(frame)
@@ -504,23 +590,6 @@ def inference(model, args, params):
         out.release()
         cv2.destroyAllWindows()
 
-def preprocess_image(image):
-    """ Preprocess image for YOLOv11 model. """
-    image = cv2.resize(image, (640, 640))
-    image = torch.tensor(image).float().cuda() / 255.0
-    image = image.permute(2, 0, 1).unsqueeze(0)  # Convert to (B, C, H, W)
-    return image
-
-def visualize_result(result, image):
-    """ Overlay YOLOv11 detection results on the image. """
-    for detection in result:
-        # print(detection)
-        # print(f"Detection output shape: {detection.shape if hasattr(detection, 'shape') else len(detection)}")
-        x1, y1, x2, y2, conf, class_id = detection
-        cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-        cv2.putText(image, f"Class: {class_id}, Conf: {conf:.2f}", 
-                    (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
 def main():
     time_start = datetime.now()
     print("Started at Date and Time:", time_start.strftime("%Y-%m-%d %H:%M:%S"))
@@ -529,7 +598,7 @@ def main():
     parser.add_argument('--input-size', default=640, type=int)
     parser.add_argument('--batch-size', default=32, type=int)
     parser.add_argument('--local-rank', default=0, type=int)
-    parser.add_argument('--local_rank', default=0, type=int)
+    # parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument('--epochs', default=600, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
@@ -608,7 +677,6 @@ def main():
 
     formatted_duration = f"{days} Days {hours:02}:{minutes:02}:{seconds:02}"
     print(f"Code execution time: {formatted_duration}")
-
 
 if __name__ == "__main__":
     main()
