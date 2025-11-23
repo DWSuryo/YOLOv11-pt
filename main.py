@@ -596,7 +596,7 @@ def main():
 
     parser = ArgumentParser()
     parser.add_argument('--input-size', default=640, type=int)
-    parser.add_argument('--batch-size', default=32, type=int)
+    parser.add_argument('--batch-size', default=16, type=int)
     parser.add_argument('--local-rank', default=0, type=int)
     # parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument('--epochs', default=600, type=int)
@@ -622,7 +622,7 @@ def main():
         if not os.path.exists('weights'):
             os.makedirs('weights')
 
-    with open('utils/args.yaml', errors='ignore') as f:
+    with open('utils/args_ori.yaml', errors='ignore') as f:
         params = yaml.safe_load(f)
         # print(params)
 

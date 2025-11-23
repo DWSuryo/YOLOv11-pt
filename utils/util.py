@@ -180,6 +180,12 @@ def smooth(y, f=0.1):
 
 def plot_pr_curve(px, py, ap, names, save_dir):
     from matplotlib import pyplot
+    # --- ADD THIS SAFETY CHECK ---
+    if len(py) == 0:
+        print("Warning: No data to plot for PR Curve.")
+        return
+    # -----------------------------
+
     # fig, ax = pyplot.subplots(1, 1, figsize=(9, 6), tight_layout=True)
     fig, ax = pyplot.subplots(1, 1, figsize=(5,5), layout='constrained')
     py = numpy.stack(py, axis=1)
@@ -289,12 +295,34 @@ def compute_ap(version, epochs, tp, conf, output, target, plot=False, names=(), 
     # Compute F1 (harmonic mean of precision and recall)
     f1 = 2 * p * r / (p + r + eps)
     if plot:
-        names = dict(enumerate(names))  # to dict
-        names = [v for k, v in names.items() if k in unique_classes]  # list: only classes that have data
-        plot_pr_curve(px, py, ap, names, save_dir=f"./weights/PR_curve_{version}_{epochs}.png")
-        plot_curve(px, f1, names, save_dir=f"./weights/F1_curve_{version}_{epochs}.png", y_label="F1")
-        plot_curve(px, p, names, save_dir=f"./weights/P_curve_{version}_{epochs}.png", y_label="Precision")
-        plot_curve(px, r, names, save_dir=f"./weights/R_curve_{version}_{epochs}.png", y_label="Recall")
+        # names = dict(enumerate(names))  # to dict
+        # names = [v for k, v in names.items() if k in unique_classes]  # list: only classes that have data
+        # plot_pr_curve(px, py, ap, names, save_dir=f"./weights/PR_curve_{version}_{epochs}.png")
+        # plot_curve(px, f1, names, save_dir=f"./weights/F1_curve_{version}_{epochs}.png", y_label="F1")
+        # plot_curve(px, p, names, save_dir=f"./weights/P_curve_{version}_{epochs}.png", y_label="Precision")
+        # plot_curve(px, r, names, save_dir=f"./weights/R_curve_{version}_{epochs}.png", y_label="Recall")
+        
+        plot_names = []
+        for c in unique_classes:
+            c = int(c)
+            if 0 <= c < len(names):
+                plot_names.append(names[c])
+            else:
+                # Fallback if class ID is missing from names list
+                plot_names.append(f"Class_{c}")
+        
+        # Ensure the save directory exists
+        import os
+        weight_dir = "./weights" # Or derived from save_dir variable
+        if not os.path.exists(weight_dir):
+            os.makedirs(weight_dir)
+            
+        # Use plot_names instead of names
+        plot_pr_curve(px, py, ap, plot_names, save_dir=f"{weight_dir}/PR_curve_{version}_{epochs}.png")
+        plot_curve(px, f1, plot_names, save_dir=f"{weight_dir}/F1_curve_{version}_{epochs}.png", y_label="F1")
+        plot_curve(px, p, plot_names, save_dir=f"{weight_dir}/P_curve_{version}_{epochs}.png", y_label="Precision")
+        plot_curve(px, r, plot_names, save_dir=f"{weight_dir}/R_curve_{version}_{epochs}.png", y_label="Recall")
+        
     i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
@@ -305,7 +333,7 @@ def compute_ap(version, epochs, tp, conf, output, target, plot=False, names=(), 
     return tp, fp, m_pre, m_rec, map50, mean_ap
 
 
-def compute_iou(box1, box2, eps=1e-7):
+def compute_iou(box1, box2, eps=1e-7, CIoU=False):
     # Returns Intersection over Union (IoU) of box1(1,4) to box2(n,4)
 
     # Get the coordinates of bounding boxes
@@ -323,11 +351,17 @@ def compute_iou(box1, box2, eps=1e-7):
 
     # IoU
     iou = inter / union
-    cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
+
+    # CRITICAL FIX: If we are just calculating metrics, return here.
+    if not CIoU:
+        return iou
+
+    # --- The code below only runs during Training (Loss calculation) ---
+    cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex width
     ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
     c2 = cw ** 2 + ch ** 2 + eps  # convex diagonal squared
     rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4  # center dist ** 2
-    # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+    
     v = (4 / math.pi ** 2) * (torch.atan(w2 / h2) - torch.atan(w1 / h1)).pow(2)
     with torch.no_grad():
         alpha = v / (v - iou + (1 + eps))
