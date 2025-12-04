@@ -174,15 +174,20 @@ cython_debug/
 .pypirc
 
 # pytorch weights
-weights/*.pt
-weights/*.pth
-weights/*.png
-!weights/lr.png
+# weights/*.pt
+# weights/*.pth
+# weights/*.png
+# !weights/lr.png
+# *.zip
+
+# step_*.csv
+# output*.mp4
+
+# !weights/*best.pt
+# !weights/*last.pt
+
+weights/*
+*.pt
 *.zip
 
-step_*.csv
-output*.mp4
-
-!weights/*best.pt
-!weights/*last.pt
-!weights/*step.csv
+.vscode/*

@@ -12,12 +12,15 @@ import yaml
 from torch.utils import data
 import cv2
 import numpy as np
+import time
 
 from nets import nn
 from utils import util
 from utils.dataset import Dataset
 
 warnings.filterwarnings("ignore")
+
+from plotting import plot_mAP
 
 # data_dir = 'D:/datasets/coco'
 data_dir = 'D:/dataset/coco-2017-download'
@@ -101,7 +104,9 @@ def train(args, params):
     amp_scale = torch.amp.GradScaler()
     criterion = util.ComputeLoss(model, params)
 
-    csv_file = f'weights/step_{version}_{args.epochs}.csv' 
+    # --- MODIFICATION: Use args.save_dir ---
+    csv_file = os.path.join(args.save_dir, 'results.csv')
+
     # Initialize lists to record mAP and epoch numbers
     mAP_list = []
     epoch_list = []
@@ -109,7 +114,7 @@ def train(args, params):
     with open(csv_file, 'w', newline='') as log:
         if args.local_rank == 0:
             logger = csv.DictWriter(log, fieldnames=['epoch',
-                                                     'box', 'cls', 'dfl',
+                                                     'box', 'cls', 'dfl', 'train_loss',
                                                      'Recall', 'Precision', 'mAP@50', 'mAP'])
             logger.writeheader()
 
@@ -183,11 +188,13 @@ def train(args, params):
                 current_mAP = last[0]  # mAP computed from test()
                 mAP_list.append(current_mAP)
                 epoch_list.append(epoch + 1)
+                total_train_loss = avg_box_loss.avg + avg_cls_loss.avg + avg_dfl_loss.avg
 
                 logger.writerow({'epoch': str(epoch + 1).zfill(3),
                                  'box': str(f'{avg_box_loss.avg:.3f}'),
                                  'cls': str(f'{avg_cls_loss.avg:.3f}'),
                                  'dfl': str(f'{avg_dfl_loss.avg:.3f}'),
+                                 'train_loss': str(f'{total_train_loss:.3f}'),
                                  'mAP': str(f'{last[0]:.6f}'),
                                  'mAP@50': str(f'{last[1]:.6f}'),
                                  'Recall': str(f'{last[2]:.3f}'),
@@ -207,62 +214,33 @@ def train(args, params):
                         }
                 # print(save['model'])
 
-                # Save last, best and delete
-                torch.save(save, f=f'./weights/last_{version}_{args.epochs}.pt')
-                # if best == last[0]:
+                # # Save last, best and delete
+                # torch.save(save, f=f'./weights/last_{version}_{args.epochs}.pt')
+                # # if best == last[0]:
+                # if best == current_mAP:
+                #     torch.save(save, f=f'./weights/best_{version}_{args.epochs}.pt')
+                # del save
+
+                # --- MODIFICATION: Save to specific dir with clean names ---
+                last_path = os.path.join(args.save_dir, 'last.pt')
+                best_path = os.path.join(args.save_dir, 'best.pt')
+                
+                torch.save(save, f=last_path)
+                
                 if best == current_mAP:
-                    torch.save(save, f=f'./weights/best_{version}_{args.epochs}.pt')
+                    torch.save(save, f=best_path)
+                
                 del save
 
     if args.local_rank == 0:
         # Finalize logging and close file.
         # log.close()
-        util.strip_optimizer(f'./weights/last_{version}_{args.epochs}.pt')  # strip optimizers
-        util.strip_optimizer(f'./weights/best_{version}_{args.epochs}.pt')  # strip optimizers
+        # util.strip_optimizer(f'./weights/last_{version}_{args.epochs}.pt')  # strip optimizers
+        # util.strip_optimizer(f'./weights/best_{version}_{args.epochs}.pt')  # strip optimizers
+        
+        util.strip_optimizer(f'./weights/{version}{args.epochs}/last.pt')  # strip optimizers
+        util.strip_optimizer(f'./weights/{version}{args.epochs}/best.pt')  # strip optimizers
     plot_mAP(args)
-
-# CSV read and plot mAP function
-def plot_mAP(args):
-    mAP_list = []
-    epoch_list = []
-    with open(f"./weights/step_{args.version}_{args.epochs}.csv", "r") as file:
-        reader = csv.DictReader(file)  # Reads as a dictionary
-        for row in reader:
-            print(row)
-            epoch_list.append(int(row["epoch"]))  # Convert epoch to integer
-            mAP_list.append(float(row["mAP"]))    # Convert mAP to float
-
-    # Find the best mAP and corresponding epoch
-    best_mAP = max(mAP_list)
-    best_epoch = epoch_list[mAP_list.index(best_mAP)]
-    last_mAP = mAP_list[-1]
-    last_epoch = epoch_list[-1]
-    # Plot mAP vs. epochs using Matplotlib
-    import matplotlib.pyplot as plt
-
-    # Create subplots
-    fig, ax = plt.subplots(1, 1, layout='constrained')
-    # Plot mAP vs. epochs
-    ax.plot(epoch_list, mAP_list, label=f'mAP (last: {last_mAP:.3f}, best: {best_mAP:.3f})')
-    # Highlight best mAP epoch
-    ax.scatter(best_epoch, best_mAP, color='red', label=f'Best mAP at epoch {best_epoch}', zorder=3)
-    # Set axis limits
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("mAP")
-    # ax.set_xlim(0, max(epoch_list))
-    ax.set_ylim(0, max(mAP_list))  # Set y-axis scale from 0 to 1
-    ax.grid(True)
-    # Set title and subtitle
-    # version = "YOLOv11 version n"  # Change this dynamically based on actual version
-    # epochs = last_epoch  # Total epochs
-    fig.suptitle("mAP vs. Epochs")
-    ax.set_title(f"YOLOv11 version {args.version} at {args.epochs} epochs")
-    # Position legend above the graph
-    # ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.15), ncol=2, frameon=False)
-    fig.legend(loc="outside lower center")
-
-    plt.savefig(f"./weights/mAP_vs_epochs_{args.version}_{args.epochs}.png")
-    plt.close()
 
 @torch.no_grad()
 def test(args, params, model=None):
@@ -285,8 +263,14 @@ def test(args, params, model=None):
         plot = True
         # pretrained
         # model = torch.load(f=f'./weights/best.pt', map_location='cuda')
-        # custom
-        model = torch.load(f=f'./weights/best_{version}_{args.epochs}.pt', map_location='cuda', weights_only=False)
+        # # custom
+        # model = torch.load(f=f'./weights/best_{version}_{args.epochs}.pt', map_location='cuda', weights_only=False)
+        # model = model['model'].float().fuse()
+
+        # --- MODIFICATION: Load from save_dir ---
+        path = os.path.join(args.save_dir, "best.pt")
+        print(f"Testing model: {path}")
+        model = torch.load(f=path, map_location='cuda', weights_only=False)
         model = model['model'].float().fuse()
 
     model.half()
@@ -339,8 +323,17 @@ def test(args, params, model=None):
 
     # Compute metrics
     metrics = [torch.cat(x, dim=0).cpu().numpy() for x in zip(*metrics)]  # to numpy
+    # Update compute_ap call if it uses save paths internally:
     if len(metrics) and metrics[0].any():
-        tp, fp, m_pre, m_rec, map50, mean_ap = util.compute_ap(version, epochs, *metrics, plot=plot, names=params["names"])
+        # --- MODIFICATION: Pass save_dir to compute_ap ---
+        tp, fp, m_pre, m_rec, map50, mean_ap = util.compute_ap(
+            version,
+            epochs, 
+            *metrics, 
+            plot=plot, 
+            names=params["names"],
+            save_dir=args.save_dir  # <--- PASS THIS HERE
+        )
     # Print results
     print(('%10s' + '%10.3g' * 4) % ('', m_pre, m_rec, map50, mean_ap))
     # Return results
@@ -380,32 +373,45 @@ def profile(args, params):
         print(f'Number of parameters: {num_params}')
         print(f'Number of FLOPs: {flops}')
 
+# def zip_weights_directory(args):
+#     weights_dir = "./weights/"
+#     files_to_zip = []
+
+#     # Ensure weights directory exists
+#     if not os.path.exists(weights_dir):
+#         print("Error: ./weights/ directory does not exist.")
+#         return
+
+#     # Collect matching files
+#     for filename in os.listdir(weights_dir):
+#         if f"_{args.version}_{args.epochs}." in filename or f"_{args.version}_{args.epochs}_state_dict." in filename:  # Match file_n_x.suffix format
+#             files_to_zip.append(os.path.join(weights_dir, filename))
+#     print(files_to_zip)
+
+#     if not files_to_zip:
+#         print("No matching files found to zip.")
+#         return
+
+#     # Create ZIP file
+#     output_zip = f"result_{args.version}_{args.epochs}.zip"
+#     with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
+#         for file in files_to_zip:
+#             zipf.write(file, os.path.basename(file))
+
+#     print(f"Successfully created {output_zip} containing {len(files_to_zip)} files.")
+
 def zip_weights_directory(args):
-    weights_dir = "./weights/"
-    files_to_zip = []
+    # Zip the specific folder (e.g., weights/n5)
+    target_dir = args.save_dir
+    output_zip = f"{args.save_dir}.zip" # e.g., weights/n5.zip
 
-    # Ensure weights directory exists
-    if not os.path.exists(weights_dir):
-        print("Error: ./weights/ directory does not exist.")
+    if not os.path.exists(target_dir):
+        print(f"Error: {target_dir} does not exist.")
         return
 
-    # Collect matching files
-    for filename in os.listdir(weights_dir):
-        if f"_{args.version}_{args.epochs}." in filename or f"_{args.version}_{args.epochs}_state_dict." in filename:  # Match file_n_x.suffix format
-            files_to_zip.append(os.path.join(weights_dir, filename))
-    print(files_to_zip)
-
-    if not files_to_zip:
-        print("No matching files found to zip.")
-        return
-
-    # Create ZIP file
-    output_zip = f"result_{args.version}_{args.epochs}.zip"
-    with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for file in files_to_zip:
-            zipf.write(file, os.path.basename(file))
-
-    print(f"Successfully created {output_zip} containing {len(files_to_zip)} files.")
+    import shutil
+    shutil.make_archive(args.save_dir, 'zip', target_dir)
+    print(f"Successfully zipped {target_dir} to {output_zip}")
 
 def inference(model, args, params):
     source_type = args.inference
@@ -424,6 +430,7 @@ def inference(model, args, params):
         start_event.record()
         
         # Preprocessing, Inference, and Post-processing for a single image
+        # 1. Pre-process (Don't time this if checking Model Speed)
         image = frame.copy()
         shape = image.shape[:2]
 
@@ -450,21 +457,31 @@ def inference(model, args, params):
         # Convert HWC to CHW, BGR to RGB
         x = image.transpose((2, 0, 1))[::-1]
         x = np.ascontiguousarray(x)
-        x = torch.from_numpy(x)
-        x = x.unsqueeze(dim=0)
-        x = x.cuda()
-        x = x.half()
-        x = x / 255
+        x = torch.from_numpy(x).unsqueeze(dim=0).cuda().half()/255.0
+        # x = x.unsqueeze(dim=0)
+        # x = x.cuda()
+        # x = x.half()
+        # x = x / 255
 
-        # Inference
+        # 2. Pure Inference Timer
+        start_event.record()
         outputs = model(x)
-        # NMS
+        end_event.record()
+        torch.cuda.synchronize()
+        model_latency = start_event.elapsed_time(end_event)
+
+        # 3. Post-process (NMS) Timer
+        t0 = time.time()
         outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
+        nms_time = (time.time() - t0) * 1000
         
         # End timing and calculate latency
         end_event.record()
         torch.cuda.synchronize()
         latency_ms = start_event.elapsed_time(end_event)
+
+        # Total System Latency
+        total_latency = model_latency + nms_time
         
         if outputs is not None:
             outputs[:, [0, 2]] -= w
@@ -482,7 +499,7 @@ def inference(model, args, params):
                 util.draw_box(frame, box, index, label)
 
         # Display latency on the image
-        latency_text = f"Latency: {latency_ms:.2f} ms"
+        latency_text = f"Model: {model_latency:.1f}ms | NMS: {nms_time:.1f}ms | Total: {total_latency:.1f}ms"
         cv2.putText(frame, latency_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
         cv2.imshow('Inference Result', frame)
@@ -499,7 +516,7 @@ def inference(model, args, params):
         if source_type == "video":
             camera = cv2.VideoCapture('src/crowd1.mp4')
         elif source_type == "camera":
-            camera = cv2.VideoCapture(0)
+            camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
         # Get video properties
         width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -532,7 +549,13 @@ def inference(model, args, params):
 
                 start_event.record()
 
+                # --- TIMER 1: Start System Timer ---
+                t_start_system = time.time()
+
+                # 1. Pre-processing (CPU)
+                t_prep_start = time.time()
                 image = frame.copy()
+
                 shape = image.shape[:2]
                 r = args.input_size / max(shape[0], shape[1])
                 if r != 1:
@@ -550,16 +573,36 @@ def inference(model, args, params):
                 image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT)
                 x = image.transpose((2, 0, 1))[::-1]
                 x = np.ascontiguousarray(x)
-                x = torch.from_numpy(x)
-                x = x.unsqueeze(dim=0)
-                x = x.cuda()
-                x = x.half()
-                x = x / 255
+
+                x = torch.from_numpy(x).unsqueeze(dim=0).cuda().half() / 255
+                # x = x.unsqueeze(dim=0)
+                # x = x.cuda()
+                # x = x.half()
+                # x = x / 255
+                t_prep_end = time.time()
+
+                # 2. Inference (GPU)
+                # We use CUDA events for precise GPU timing
+                start_event = torch.Event('cuda', enable_timing=True)
+                end_event = torch.Event('cuda', enable_timing=True)
+                
+                start_event.record()
+
                 outputs = model(x)
-                outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
                 end_event.record()
-                torch.cuda.synchronize()
-                latency_ms = start_event.elapsed_time(end_event)
+                torch.cuda.synchronize() # Wait for GPU to finish
+                inference_time_ms = start_event.elapsed_time(end_event) # Pure Model Time
+                
+                # 3. NMS (CPU)
+                t_nms_start = time.time()
+                outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
+                t_nms_end = time.time()
+                # Calculate Latencies
+                preprocess_ms = (t_prep_end - t_prep_start) * 1000
+                nms_ms = (t_nms_end - t_nms_start) * 1000
+                e2e_latency_ms = preprocess_ms + inference_time_ms + nms_ms
+
+                # 4. Visualization (CPU - Slow!)
                 if outputs is not None:
                     outputs[:, [0, 2]] -= w
                     outputs[:, [1, 3]] -= h
@@ -575,14 +618,40 @@ def inference(model, args, params):
                         label = f"{class_name} {score:.2f}"
                         util.draw_box(frame, box, index, label)
                 
-                fps_text = f"FPS: {fps_display:.2f}"
-                latency_text = f"Latency: {latency_ms:.2f} ms"
-                cv2.putText(frame, fps_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(frame, latency_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # fps_text = f"FPS: {fps_display:.2f}"
+                # latency_text = f"Latency: {latency_ms:.2f} ms"
+                # cv2.putText(frame, fps_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # cv2.putText(frame, latency_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-                cv2.imshow('Frame', frame)
+                # cv2.imshow('Frame', frame)
+                # out.write(frame)
+
+                # 5. FPS Calculation (Moving Average)
+                # We use t_start_system to capture the FULL loop time
+                system_latency_ms = (time.time() - t_start_system) * 1000
+                current_fps = 1000.0 / (system_latency_ms + 1e-8)
+                
+                # Smoothing the FPS display so it doesn't flicker
+                fps_display = 0.9 * fps_display + 0.1 * current_fps
+
+                # --- DISPLAY STATS ---
+                # Line 1: Real System Speed
+                theoretical_fps = 1000.0 / e2e_latency_ms
+                cv2.putText(frame, f"System FPS: {fps_display:.1f} | Model Potential: {theoretical_fps:.0f} FPS", (10, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Line 2: The breakdown (Why is it slow?)
+                info_text = f"Pre:{preprocess_ms:.1f}ms | Inf:{inference_time_ms:.1f}ms | NMS:{nms_ms:.1f}ms"
+                cv2.putText(frame, info_text, (10, 60), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+                # # Line 3: Theoretical Max FPS (If you removed display/webcam bottleneck)
+                # cv2.putText(frame, f"Model Potential: {theoretical_fps:.0f} FPS", (10, 90), 
+                #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+                cv2.imshow('Inference', frame)
                 out.write(frame)
-                if cv2.waitKey(25) & 0xFF == ord('q'):
+                if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
             else:
                 break
@@ -598,17 +667,22 @@ def main():
     parser.add_argument('--input-size', default=640, type=int)
     parser.add_argument('--batch-size', default=16, type=int)
     parser.add_argument('--local-rank', default=0, type=int)
-    # parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument('--epochs', default=600, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
-    parser.add_argument('--version', default='m', type=str)
+    parser.add_argument('--version', default='n', type=str)
     parser.add_argument('--zip', action='store_true')
     parser.add_argument("--inference", type=str, choices=["image", "video", "camera"])
-    # parser.add_argument("--source", type=str)
 
     args = parser.parse_args()
     print(args)
+
+    # --- STRATEGY: Define Dynamic Save Directory ---
+    # Example result: ./weights/n5 or ./weights/s100
+    run_name = f"{args.version}{args.epochs}"
+    args.save_dir = os.path.join("weights", run_name)
+    print(f"Output Directory: {args.save_dir}")
+    # -----------------------------------------------
 
     args.local_rank = int(os.getenv('LOCAL_RANK', 0))
     args.world_size = int(os.getenv('WORLD_SIZE', 1))
@@ -619,10 +693,12 @@ def main():
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
     if args.local_rank == 0:
-        if not os.path.exists('weights'):
-            os.makedirs('weights')
+        if not os.path.exists(args.save_dir):
+            os.makedirs(args.save_dir)
+        # if not os.path.exists('weights'):
+        #     os.makedirs('weights')
 
-    with open('utils/args_ori.yaml', errors='ignore') as f:
+    with open('utils/args.yaml', errors='ignore') as f:
         params = yaml.safe_load(f)
         # print(params)
 
@@ -661,9 +737,15 @@ def main():
         #     model = nn.yolo_v11_x(len(params['names']))
         # else:
         #     raise ValueError(f"Unsupported YOLOv11 variant: {version}. Choose from 'n', 's', 'm', 'l', 'x'.")
-        model_path = f"./weights/best_{args.version}_{args.epochs}.pt"
+        # Load directly from the specific folder
+        model_path = os.path.join(args.save_dir, "best.pt")
+        if not os.path.exists(model_path):
+             print(f"Error: Model not found at {model_path}")
+             return
+        
+        print(f"Loading model from: {model_path}")
         model_data = torch.load(model_path, map_location="cuda", weights_only=False)
-        model = model_data["model"].eval().cuda()
+        model = model_data["model"].eval().cuda().half()
         inference(model, args, params)
 
     time_end = datetime.now()

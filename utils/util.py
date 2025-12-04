@@ -233,7 +233,7 @@ def plot_curve(px, py, names, save_dir, x_label="Confidence", y_label="Metric"):
     pyplot.close(figure)
 
 
-def compute_ap(version, epochs, tp, conf, output, target, plot=False, names=(), eps=1E-16):
+def compute_ap(version, epochs, tp, conf, output, target, plot=False, names=(), eps=1E-16, save_dir=None):
     """
     Compute the average precision, given the recall and precision curves.
     Source: https://github.com/rafaelpadilla/Object-Detection-Metrics.
@@ -317,11 +317,16 @@ def compute_ap(version, epochs, tp, conf, output, target, plot=False, names=(), 
         if not os.path.exists(weight_dir):
             os.makedirs(weight_dir)
             
-        # Use plot_names instead of names
-        plot_pr_curve(px, py, ap, plot_names, save_dir=f"{weight_dir}/PR_curve_{version}_{epochs}.png")
-        plot_curve(px, f1, plot_names, save_dir=f"{weight_dir}/F1_curve_{version}_{epochs}.png", y_label="F1")
-        plot_curve(px, p, plot_names, save_dir=f"{weight_dir}/P_curve_{version}_{epochs}.png", y_label="Precision")
-        plot_curve(px, r, plot_names, save_dir=f"{weight_dir}/R_curve_{version}_{epochs}.png", y_label="Recall")
+        # --- MODIFICATION: Use save_dir passed from argument ---
+        if save_dir:
+            # We don't need to create directory here, main.py did it
+            # We also simplify filenames since they are inside the folder already
+            plot_pr_curve(px, py, ap, plot_names, save_dir=os.path.join(save_dir, "PR_curve.png"))
+            plot_curve(px, f1, plot_names, save_dir=os.path.join(save_dir, "F1_curve.png"), y_label="F1")
+            plot_curve(px, p, plot_names, save_dir=os.path.join(save_dir, "P_curve.png"), y_label="Precision")
+            plot_curve(px, r, plot_names, save_dir=os.path.join(save_dir, "R_curve.png"), y_label="Recall")
+        else:
+             print("Warning: Plot=True but no save_dir provided to compute_ap")
         
     i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
@@ -464,9 +469,22 @@ class LinearLR:
         max_lr = params['max_lr']
         min_lr = params['min_lr']
 
+        total_steps = args.epochs * num_steps
+
         warmup_steps = int(max(params['warmup_epochs'] * num_steps, 100))
-        print("warmup_steps: ", warmup_steps)
+        # --- FIX: Prevent Warmup from exceeding Total Steps ---
+        if warmup_steps >= total_steps:
+            # If total training is shorter than defined warmup, 
+            # we limit warmup to a fraction (e.g., 10%) of the total run
+            # or just total_steps - 1 to prevent negative decay.
+            print(f"Warning: Warmup steps ({warmup_steps}) > Total steps ({total_steps}). Adjusting warmup.")
+            warmup_steps = int(total_steps * 0.1)
+
+        # Ensure warmup is at least 0
+        warmup_steps = max(warmup_steps, 0)
+        
         decay_steps = int(args.epochs * num_steps - warmup_steps)
+        print("warmup_steps: ", warmup_steps)
         print("decay_steps: ", decay_steps)
 
         warmup_lr = numpy.linspace(min_lr, max_lr, int(warmup_steps), endpoint=False)
@@ -475,9 +493,15 @@ class LinearLR:
         self.total_lr = numpy.concatenate((warmup_lr, decay_lr))
 
     def step(self, step, optimizer):
+        # for param_group in optimizer.param_groups:
+        #     param_group['lr'] = self.total_lr[step]
+        
         for param_group in optimizer.param_groups:
-            param_group['lr'] = self.total_lr[step]
-
+            # Safety check to prevent index out of bounds if training runs long
+            if step < len(self.total_lr):
+                param_group['lr'] = self.total_lr[step]
+            else:
+                param_group['lr'] = self.total_lr[-1]
 
 class EMA:
     """
