@@ -13,6 +13,7 @@ from torch.utils import data
 import cv2
 import numpy as np
 import time
+import statistics
 
 from nets import nn
 from utils import util
@@ -659,6 +660,197 @@ def inference(model, args, params):
         out.release()
         cv2.destroyAllWindows()
 
+def benchmark(model, args, params):
+    # Setup Input (Camera or Video)
+    source_type = args.inference
+    source_path = 'src/crowd1.mp4' # Default video
+    
+    if source_type == "camera":
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        print(f"📷 Source: Camera (0)")
+    else:
+        # Check if file exists
+        if not os.path.exists(source_path):
+            print(f"Error: Video file not found at {source_path}")
+            return
+        cap = cv2.VideoCapture(source_path)
+        print(f"🎬 Source: Video ({source_path})")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames < 0: total_frames = "Unknown" # Camera doesn't have total frames
+
+    print(f"\n{'='*60}")
+    print(f"🚀 BENCHMARK CONFIGURATION")
+    print(f"   Model: {args.version.upper()} @ {args.input_size}px")
+    print(f"   Display: {'ON' if args.view else 'OFF'}")
+    print(f"   Time Limit: {args.timeout if args.timeout else 'None'} seconds")
+    print(f"{'='*60}\n")
+
+    records = {'pre': [], 'inf': [], 'nms': [], 'total': []}
+    
+    # Timers
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    benchmark_start_time = time.time()
+    
+    frame_idx = 0
+    warmup_frames = 30
+    
+    while cap.isOpened():
+        # --- 1. Check Time Limit ---
+        if args.timeout:
+            elapsed_total = time.time() - benchmark_start_time
+            if elapsed_total > args.timeout:
+                print(f"\n⏰ Time limit of {args.timeout}s reached. Stopping.")
+                break
+
+        ret, frame = cap.read()
+        if not ret:
+            print("\nEnd of stream reached.")
+            break
+        
+        frame_idx += 1
+
+        # --- 2. Pre-process ---
+        t0 = time.time()
+        image = frame.copy()
+        shape = image.shape[:2]
+        
+        # Letterbox Resize
+        r = args.input_size / max(shape[0], shape[1])
+        if r != 1:
+            resample = cv2.INTER_LINEAR if r > 1 else cv2.INTER_AREA
+            image = cv2.resize(image, dsize=(int(shape[1] * r), int(shape[0] * r)), interpolation=resample)
+        
+        height, width = image.shape[:2]
+        r = min(1.0, args.input_size / height, args.input_size / width)
+        pad = int(round(width * r)), int(round(height * r))
+        w = (args.input_size - pad[0]) / 2
+        h = (args.input_size - pad[1]) / 2
+        
+        if (width, height) != pad:
+            image = cv2.resize(image, pad, interpolation=cv2.INTER_LINEAR)
+        
+        top, bottom = int(round(h - 0.1)), int(round(h + 0.1))
+        left, right = int(round(w - 0.1)), int(round(w + 0.1))
+        image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT)
+        
+        x = image.transpose((2, 0, 1))[::-1]
+        x = np.ascontiguousarray(x)
+        x = torch.from_numpy(x).unsqueeze(0).cuda()
+        
+        # Adaptive Precision
+        model_dtype = next(model.parameters()).dtype
+        x = x.to(model_dtype)
+        x = x / 255.0
+        
+        t1 = time.time()
+
+        # --- 3. Inference ---
+        start_event.record()
+        outputs = model(x)
+        end_event.record()
+        torch.cuda.synchronize()
+        
+        # --- 4. NMS ---
+        t2 = time.time()
+        outputs = util.non_max_suppression(outputs, 0.15, 0.2)[0]
+        t3 = time.time()
+
+        # --- 5. Data Recording ---
+        if frame_idx > warmup_frames:
+            t_pre = (t1 - t0) * 1000
+            t_inf = start_event.elapsed_time(end_event)
+            t_nms = (t3 - t2) * 1000
+            t_total = t_pre + t_inf + t_nms
+
+            records['pre'].append(t_pre)
+            records['inf'].append(t_inf)
+            records['nms'].append(t_nms)
+            records['total'].append(t_total)
+
+            if frame_idx % 50 == 0:
+                 print(f"Frame {frame_idx} | Latency: {t_total:.2f}ms")
+
+        # --- 6. Optional Visualization ---
+        if args.view:
+            if outputs is not None:
+                # Rescale boxes back to original image size
+                outputs[:, [0, 2]] -= w
+                outputs[:, [1, 3]] -= h
+                outputs[:, :4] /= min(height / shape[0], width / shape[1])
+                outputs[:, 0].clamp_(0, shape[1])
+                outputs[:, 1].clamp_(0, shape[0])
+                outputs[:, 2].clamp_(0, shape[1])
+                outputs[:, 3].clamp_(0, shape[0])
+                
+                for box in outputs:
+                    box = box.cpu().numpy()
+                    x1, y1, x2, y2, score, index = box
+                    class_name = params['names'][int(index)]
+                    label = f"{class_name} {score:.2f}"
+                    util.draw_box(frame, box, index, label)
+            
+            # Show "BENCHMARKING" on screen
+            cv2.putText(frame, "BENCHMARK MODE", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.imshow('Benchmark', frame)
+            
+            # Allow quitting with 'q'
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("User interrupted benchmark.")
+                break
+
+    cap.release()
+    if args.view:
+        cv2.destroyAllWindows()
+
+    # --- Calculations & Saving (Same as before) ---
+    count = len(records['total'])
+    if count == 0:
+        print("Not enough frames processed.")
+        return
+
+    stats = {}
+    for key in records:
+        data = records[key]
+        stats[key] = {
+            'min': min(data),
+            'max': max(data),
+            'avg': statistics.mean(data),
+            'p95': statistics.quantiles(data, n=20)[-1]
+        }
+    
+    avg_fps = 1000.0 / stats['total']['avg']
+
+    print(f"\n{'='*60}")
+    print(f"📊 RESULTS (Frames: {count} | View: {args.view})")
+    print(f"{'='*60}")
+    print(f"{'Metric':<15} | {'Avg (ms)':<10} | {'P95 (ms)':<10}")
+    print(f"{'-'*60}")
+    print(f"{'Pre-Process':<15} | {stats['pre']['avg']:<10.2f} | {stats['pre']['p95']:<10.2f}")
+    print(f"{'Inference':<15} | {stats['inf']['avg']:<10.2f} | {stats['inf']['p95']:<10.2f}")
+    print(f"{'NMS':<15} | {stats['nms']['avg']:<10.2f} | {stats['nms']['p95']:<10.2f}")
+    print(f"{'-'*60}")
+    print(f"Total Latency   | {stats['total']['avg']:<10.2f} | {stats['total']['p95']:<10.2f}")
+    print(f"Potential FPS   | {avg_fps:.2f}")
+    print(f"{'='*60}\n")
+
+    # --- Save to CSV ---
+    csv_filename = os.path.join(args.save_dir, f"benchmark_stats_{args.inference}.csv")
+    
+    with open(csv_filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Model", "Input Size", "Metric", "Avg(ms)", "Min(ms)", "Max(ms)", "P95(ms)", "FPS"])
+        
+        # Write rows
+        base_info = [args.version, args.input_size]
+        writer.writerow(base_info + ["Pre-Process", f"{stats['pre']['avg']:.2f}", f"{stats['pre']['min']:.2f}", f"{stats['pre']['max']:.2f}", f"{stats['pre']['p95']:.2f}", "-"])
+        writer.writerow(base_info + ["Inference", f"{stats['inf']['avg']:.2f}", f"{stats['inf']['min']:.2f}", f"{stats['inf']['max']:.2f}", f"{stats['inf']['p95']:.2f}", "-"])
+        writer.writerow(base_info + ["NMS", f"{stats['nms']['avg']:.2f}", f"{stats['nms']['min']:.2f}", f"{stats['nms']['max']:.2f}", f"{stats['nms']['p95']:.2f}", "-"])
+        writer.writerow(base_info + ["Total E2E", f"{stats['total']['avg']:.2f}", f"{stats['total']['min']:.2f}", f"{stats['total']['max']:.2f}", f"{stats['total']['p95']:.2f}", f"{avg_fps:.2f}"])
+
+    print(f"✅ Statistics saved to: {csv_filename}")
+
 def main():
     time_start = datetime.now()
     print("Started at Date and Time:", time_start.strftime("%Y-%m-%d %H:%M:%S"))
@@ -673,6 +865,11 @@ def main():
     parser.add_argument('--version', default='n', type=str)
     parser.add_argument('--zip', action='store_true')
     parser.add_argument("--inference", type=str, choices=["image", "video", "camera"])
+    
+    parser.add_argument('--benchmark', action='store_true', help="Run speed benchmark")
+    # --- ADD THESE TWO ---
+    parser.add_argument('--view', action='store_true', help="Show video during benchmark (slower)")
+    parser.add_argument('--timeout', type=int, default=None, help="Stop benchmark after X seconds")
 
     args = parser.parse_args()
     print(args)
@@ -746,7 +943,11 @@ def main():
         print(f"Loading model from: {model_path}")
         model_data = torch.load(model_path, map_location="cuda", weights_only=False)
         model = model_data["model"].eval().cuda().half()
-        inference(model, args, params)
+
+        if args.benchmark:
+            benchmark(model, args, params)
+        else:
+            inference(model, args, params)
 
     time_end = datetime.now()
     print("Finished at Date and Time:", time_end.strftime("%Y-%m-%d %H:%M:%S"))
